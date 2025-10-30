@@ -4,7 +4,6 @@ import numpy as np
 import folium
 from shapely.geometry import Point, LineString, MultiLineString, MultiPoint
 
-
 # -----------------------------
 # 1. Chargement des données
 # -----------------------------
@@ -13,54 +12,21 @@ infras = gpd.read_file("infrastructures.shp")
 reseau = pd.read_excel("reseau_en_arbre.xlsx")
 batiments.rename(columns={"id_bat": "id_batiment"}, inplace=True)
 
-# Chargement CSV avec nettoyage des noms de colonnes
+# -----------------------------
+# 1.b Ajout des infos type_batiment
+# -----------------------------
 bat_info = pd.read_csv("batiments.csv")
-bat_info.columns = [col.strip() for col in bat_info.columns]  # enlever espaces cachés
+# Vérif colonnes
+assert {'id_batiment', 'type_batiment', 'nb_maisons'}.issubset(bat_info.columns), \
+    "Le CSV doit contenir id_batiment, type_batiment, nb_maisons"
 
-print("=" * 60)
-print("DIAGNOSTIC - Contenu du CSV batiments.csv:")
-print(bat_info.head(20))
-print(f"\nNombre total de bâtiments dans le CSV: {len(bat_info)}")
-print("\nRépartition des types de bâtiments:")
-print(bat_info['type_batiment'].value_counts())
-print("=" * 60)
+# Fusion avec les shapefiles - on renomme nb_maisons pour éviter le conflit
+bat_info_merged = bat_info.rename(columns={'nb_maisons': 'nb_maisons_csv'})
+batiments = batiments.merge(bat_info_merged, on='id_batiment', how='left')
 
-# Vérif colonnes attendues
-required_cols = {'id_batiment', 'type_batiment', 'nb_maisons'}
-assert required_cols.issubset(bat_info.columns), \
-    f"Le CSV doit contenir obligatoirement {required_cols}"
-
-print("\nColonnes shapefile avant fusion:", batiments.columns.tolist())
-
-# Fusion batiments avec infos CSV
-batiments = batiments.merge(
-    bat_info[['id_batiment', 'type_batiment', 'nb_maisons']],
-    on='id_batiment',
-    how='left',
-    suffixes=('', '_csv')
-)
-
-# Gérer suffixe si nb_maisons existait déjà
-if 'nb_maisons_csv' in batiments.columns:
-    batiments['nb_maisons'] = batiments['nb_maisons_csv']
-    batiments = batiments.drop(columns=['nb_maisons_csv'])
-
-# S'assurer que la colonne existe et valeurs manquantes remplacées
-if 'nb_maisons' not in batiments.columns:
-    batiments['nb_maisons'] = 1
-else:
-    batiments['nb_maisons'] = batiments['nb_maisons'].fillna(1)
-
-# Valeurs par défaut pour type_batiment
+# Mettre valeurs par défaut si manquantes
 batiments['type_batiment'] = batiments['type_batiment'].fillna('habitation')
-
-print("Colonnes shapefile après fusion:", batiments.columns.tolist())
-print("\nExemple données fusionnées:")
-print(batiments[['id_batiment', 'type_batiment', 'nb_maisons']].head(20))
-print("\nRépartition des types après fusion:")
-print(batiments['type_batiment'].value_counts())
-print("=" * 60)
-
+batiments['nb_maisons_csv'] = batiments['nb_maisons_csv'].fillna(1)
 
 # -----------------------------
 # 2. Harmonisation CRS (Folium = EPSG:4326)
@@ -76,23 +42,23 @@ infras = infras.to_crs(epsg=4326)
 # -----------------------------
 # 3. Fusion et préparation des variables
 # -----------------------------
-# Préparer la liste des colonnes à fusionner, s'assurer de la présence de nb_maisons
-to_merge = ["id_batiment", "type_batiment", "geometry"]
-if 'nb_maisons' in batiments.columns:
-    to_merge.append('nb_maisons')
-else:
-    batiments['nb_maisons'] = 1
-    to_merge.append('nb_maisons')
-
 reseau = reseau.merge(
-    batiments[to_merge],
+    batiments[["id_batiment", "type_batiment", "nb_maisons_csv", "geometry"]],
     on="id_batiment",
     how="left"
 )
 
-# Valeurs par défaut pour colonnes manquantes
+# Utiliser nb_maisons_csv en priorité, sinon garder l'ancienne valeur
+if 'nb_maisons' in reseau.columns:
+    reseau['nb_maisons'] = reseau['nb_maisons_csv'].fillna(reseau['nb_maisons']).fillna(1)
+else:
+    reseau['nb_maisons'] = reseau['nb_maisons_csv'].fillna(1)
+
+# Supprimer la colonne temporaire
+reseau = reseau.drop(columns=['nb_maisons_csv'])
+
+# Valeurs par défaut pour les colonnes manquantes
 reseau['type_batiment'] = reseau['type_batiment'].fillna('habitation')
-reseau['nb_maisons'] = reseau['nb_maisons'].fillna(1)
 reseau["difficulte_bat"] = reseau.get("difficulte_bat", 1)
 reseau["difficulte_infra"] = reseau.get("difficulte_infra", 1)
 reseau["infra_type"] = reseau.get("infra_type", "infra_intacte")
@@ -101,12 +67,7 @@ reseau["nb_batiments"] = reseau.groupby("infra_id")["id_batiment"].transform("co
 reseau["temps_reparation"] = reseau.get("temps_reparation", 1.0)
 reseau["prise"] = reseau["nb_batiments"] * reseau["nb_maisons"]
 
-print("\nAprès fusion avec reseau:")
-print(reseau[['id_batiment', 'type_batiment', 'nb_maisons', 'prise']].head(20))
-print("\nRépartition des types dans reseau:")
-print(reseau['type_batiment'].value_counts())
-print("=" * 60)
-
+# Poids de priorité selon le type de bâtiment
 priorite_map = {
     'hopital': 3.0,
     'ecole': 2.0,
@@ -146,10 +107,6 @@ def attribuer_phase(row):
 
 reseau["phase"] = reseau.apply(attribuer_phase, axis=1)
 
-print("\nRépartition phase par type:")
-print(reseau.groupby(['type_batiment', 'phase']).size())
-print("=" * 60)
-
 # -----------------------------
 # 5. Planification temporelle
 # -----------------------------
@@ -184,27 +141,26 @@ infras_plot = infras.merge(infra_phase, on='infra_id', how='left')
 infras_plot['type_batiment'] = infras_plot['type_batiment'].fillna('habitation')
 infras_plot['color'] = infras_plot['type_batiment'].map(bat_colors).fillna("#cccccc")
 
-print("\nRépartition des types dans infras_plot:")
-print(infras_plot['type_batiment'].value_counts())
-print("=" * 60)
-
-# Fusion pour bat_plot
+# CORRECTION ICI : inclure nb_maisons dans la fusion
 bat_plot = batiments.merge(
-    reseau[['id_batiment','infra_id','phase','prise','jour_planifie']], 
+    reseau[['id_batiment','infra_id','phase','prise','jour_planifie','type_batiment','nb_maisons']], 
     on='id_batiment', 
-    how='left'
+    how='left',
+    suffixes=('_bat', '_reseau')
 )
 
-# Garder type_batiment et nb_maisons de batiments (déjà présents)
+# Gérer les suffixes si type_batiment existe déjà dans batiments
+if 'type_batiment_reseau' in bat_plot.columns:
+    bat_plot['type_batiment'] = bat_plot['type_batiment_reseau'].fillna(bat_plot.get('type_batiment_bat', 'habitation'))
+    bat_plot = bat_plot.drop(columns=['type_batiment_bat', 'type_batiment_reseau'], errors='ignore')
+
+if 'nb_maisons_reseau' in bat_plot.columns:
+    bat_plot['nb_maisons'] = bat_plot['nb_maisons_reseau'].fillna(bat_plot.get('nb_maisons_bat', 1))
+    bat_plot = bat_plot.drop(columns=['nb_maisons_bat', 'nb_maisons_reseau'], errors='ignore')
+
 bat_plot['type_batiment'] = bat_plot['type_batiment'].fillna('habitation')
 bat_plot['nb_maisons'] = bat_plot['nb_maisons'].fillna(1)
 bat_plot['color'] = bat_plot['type_batiment'].map(bat_colors).fillna("#cccccc")
-
-print("\nRépartition des types dans bat_plot:")
-print(bat_plot['type_batiment'].value_counts())
-print("\nRépartition des couleurs dans bat_plot:")
-print(bat_plot['color'].value_counts())
-print("=" * 60)
 
 # Vérif : on a bien des géométries valides
 bat_plot = bat_plot[bat_plot.geometry.notna()]
@@ -234,7 +190,7 @@ for _, infra in infras_plot.iterrows():
         folium.PolyLine(
             line,
             color=infra['color'],
-            weight=4,
+            weight=3,
             opacity=0.9,
             tooltip=f"Infrastructure {infra['infra_id']}<br>Type: {infra['type_batiment']}<br>Phase: {infra['phase']}<br>Jour: {infra['jour_planifie']:.0f}<br>Prise: {infra['prise']}"
         ).add_to(m)
@@ -252,22 +208,10 @@ for _, bat in bat_plot.iterrows():
     else:
         continue
 
-    # Taille et style selon le type
-    if bat['type_batiment'] == 'hopital':
-        radius = 8
-        weight = 2
-    elif bat['type_batiment'] == 'ecole':
-        radius = 6
-        weight = 2
-    else:
-        radius = 4
-        weight = 1
-
     folium.CircleMarker(
         location=coords,
-        radius=radius,
+        radius=5 if bat['type_batiment'] != 'habitation' else 4,
         color=bat['color'],
-        weight=weight,
         fill=True,
         fill_color=bat['color'],
         fill_opacity=0.9,
@@ -284,9 +228,9 @@ legend_html = """
 <div style="position: fixed; bottom: 30px; left: 30px; background-color: white;
             border:2px solid grey; z-index:9999; font-size:14px; padding:10px;">
 <b>Légende - Type de bâtiment</b><br>
-<i style="background:#e41a1c;width:15px;height:15px;display:inline-block;border-radius:50%;"></i> Hôpital (Priorité MAX)<br>
-<i style="background:#ff7f00;width:15px;height:15px;display:inline-block;border-radius:50%;"></i> École (Priorité HAUTE)<br>
-<i style="background:#4daf4a;width:15px;height:15px;display:inline-block;border-radius:50%;"></i> Habitation<br>
+<i style="background:#e41a1c;width:10px;height:10px;display:inline-block;"></i> Hôpital (Priorité MAX)<br>
+<i style="background:#ff7f00;width:10px;height:10px;display:inline-block;"></i> École (Priorité HAUTE)<br>
+<i style="background:#4daf4a;width:10px;height:10px;display:inline-block;"></i> Habitation<br>
 </div>
 """
 m.get_root().html.add_child(folium.Element(legend_html))
@@ -295,6 +239,6 @@ m.get_root().html.add_child(folium.Element(legend_html))
 # 9. Export
 # -----------------------------
 m.save("visualisation_folium_avec_types.html")
-print("\n✅ Carte Folium exportée : visualisation_folium_avec_types.html")
-print(f"\nStatistiques finales de priorisation:")
+print("Carte Folium exportée : visualisation_folium_avec_types.html")
+print(f"\nStatistiques de priorisation:")
 print(reseau.groupby(['type_batiment', 'phase']).size())
