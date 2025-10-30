@@ -4,6 +4,7 @@ import numpy as np
 import folium
 from shapely.geometry import Point, LineString, MultiLineString, MultiPoint
 
+
 # -----------------------------
 # 1. Chargement des données
 # -----------------------------
@@ -11,6 +12,7 @@ batiments = gpd.read_file("batiments.shp")
 infras = gpd.read_file("infrastructures.shp")
 reseau = pd.read_excel("reseau_en_arbre.xlsx")
 batiments.rename(columns={"id_bat": "id_batiment"}, inplace=True)
+
 
 # -----------------------------
 # 1.b Ajout des infos type_batiment
@@ -20,13 +22,14 @@ bat_info = pd.read_csv("batiments.csv")
 assert {'id_batiment', 'type_batiment', 'nb_maisons'}.issubset(bat_info.columns), \
     "Le CSV doit contenir id_batiment, type_batiment, nb_maisons"
 
-# Fusion avec les shapefiles - on renomme nb_maisons pour éviter le conflit
+# Renommer nb_maisons pour éviter conflit lors fusion
 bat_info_merged = bat_info.rename(columns={'nb_maisons': 'nb_maisons_csv'})
 batiments = batiments.merge(bat_info_merged, on='id_batiment', how='left')
 
 # Mettre valeurs par défaut si manquantes
 batiments['type_batiment'] = batiments['type_batiment'].fillna('habitation')
 batiments['nb_maisons_csv'] = batiments['nb_maisons_csv'].fillna(1)
+
 
 # -----------------------------
 # 2. Harmonisation CRS (Folium = EPSG:4326)
@@ -38,6 +41,7 @@ if infras.crs is None:
 
 batiments = batiments.to_crs(epsg=4326)
 infras = infras.to_crs(epsg=4326)
+
 
 # -----------------------------
 # 3. Fusion et préparation des variables
@@ -59,6 +63,24 @@ reseau = reseau.drop(columns=['nb_maisons_csv'])
 
 # Valeurs par défaut pour les colonnes manquantes
 reseau['type_batiment'] = reseau['type_batiment'].fillna('habitation')
+
+# ------------- Normalisation des types -------------
+# Uniformisation des valeurs pour éviter doublons avec accents et casse
+def normalize_type_bat(typ):
+    if pd.isna(typ):
+        return 'habitation'
+    typ = typ.lower()
+    typ = typ.replace('é', 'e').replace('è', 'e').replace('ê', 'e').replace('à', 'a')
+    typ = typ.replace('ù', 'u').replace('ô', 'o').replace('î', 'i').replace('û', 'u')
+    typ = typ.replace('hôpital', 'hopital').replace('école', 'ecole')
+    if typ not in ['hopital', 'ecole', 'habitation']:
+        return 'habitation'
+    return typ
+
+reseau['type_batiment'] = reseau['type_batiment'].apply(normalize_type_bat)
+
+# ----------------------------------------------------
+
 reseau["difficulte_bat"] = reseau.get("difficulte_bat", 1)
 reseau["difficulte_infra"] = reseau.get("difficulte_infra", 1)
 reseau["infra_type"] = reseau.get("infra_type", "infra_intacte")
@@ -74,6 +96,7 @@ priorite_map = {
     'habitation': 1.0
 }
 reseau['poids_priorite'] = reseau['type_batiment'].map(priorite_map).fillna(1.0)
+
 
 # -----------------------------
 # 4. Normalisation et score
@@ -101,22 +124,25 @@ def attribuer_phase(row):
         elif row['type_batiment'] == 'ecole':
             return 1
         else:
-            return 1 if row['score_phase'] >= reseau[reseau['infra_type']=="a_remplacer"]["score_phase"].quantile(0.5) else 2
+            seuil = reseau[reseau['infra_type']=="a_remplacer"]["score_phase"].quantile(0.5)
+            return 1 if row['score_phase'] >= seuil else 2
     else:
         return 2
 
 reseau["phase"] = reseau.apply(attribuer_phase, axis=1)
 
+
 # -----------------------------
 # 5. Planification temporelle
 # -----------------------------
 max_jour = 30
-phase2 = reseau[reseau['phase']==2].copy()
+phase2 = reseau[reseau['phase'] == 2].copy()
 phase2 = phase2.sort_values("score_phase", ascending=False)
 phase2["jour_planifie"] = np.linspace(2, max_jour, len(phase2))
 reseau.loc[phase2.index, "jour_planifie"] = phase2["jour_planifie"]
-reseau.loc[reseau['phase']==1, "jour_planifie"] = 1
-reseau.loc[reseau['phase']==0, "jour_planifie"] = 0
+reseau.loc[reseau['phase'] == 1, "jour_planifie"] = 1
+reseau.loc[reseau['phase'] == 0, "jour_planifie"] = 0
+
 
 # -----------------------------
 # 6. Palette de couleur selon type de bâtiment
@@ -127,10 +153,11 @@ bat_colors = {
     'habitation': '#4daf4a'   # vert
 }
 
+
 # -----------------------------
 # 7. Association batiments / infrastructures
 # -----------------------------
-infra_phase = reseau.groupby('infra_id')[['phase','prise','jour_planifie','type_batiment']].agg({
+infra_phase = reseau.groupby('infra_id')[['phase', 'prise', 'jour_planifie', 'type_batiment']].agg({
     'phase': 'max',
     'prise': 'max',
     'jour_planifie': 'max',
@@ -141,15 +168,15 @@ infras_plot = infras.merge(infra_phase, on='infra_id', how='left')
 infras_plot['type_batiment'] = infras_plot['type_batiment'].fillna('habitation')
 infras_plot['color'] = infras_plot['type_batiment'].map(bat_colors).fillna("#cccccc")
 
-# CORRECTION ICI : inclure nb_maisons dans la fusion
+# Inclure nb_maisons dans fusion bat_plot
 bat_plot = batiments.merge(
-    reseau[['id_batiment','infra_id','phase','prise','jour_planifie','type_batiment','nb_maisons']], 
-    on='id_batiment', 
+    reseau[['id_batiment', 'infra_id', 'phase', 'prise', 'jour_planifie', 'type_batiment', 'nb_maisons']],
+    on='id_batiment',
     how='left',
     suffixes=('_bat', '_reseau')
 )
 
-# Gérer les suffixes si type_batiment existe déjà dans batiments
+# Gérer les suffixes éventuels
 if 'type_batiment_reseau' in bat_plot.columns:
     bat_plot['type_batiment'] = bat_plot['type_batiment_reseau'].fillna(bat_plot.get('type_batiment_bat', 'habitation'))
     bat_plot = bat_plot.drop(columns=['type_batiment_bat', 'type_batiment_reseau'], errors='ignore')
@@ -162,9 +189,10 @@ bat_plot['type_batiment'] = bat_plot['type_batiment'].fillna('habitation')
 bat_plot['nb_maisons'] = bat_plot['nb_maisons'].fillna(1)
 bat_plot['color'] = bat_plot['type_batiment'].map(bat_colors).fillna("#cccccc")
 
-# Vérif : on a bien des géométries valides
+# Vérif géométries valides
 bat_plot = bat_plot[bat_plot.geometry.notna()]
 infras_plot = infras_plot[infras_plot.geometry.notna()]
+
 
 # -----------------------------
 # 8. Création carte Folium
@@ -172,7 +200,7 @@ infras_plot = infras_plot[infras_plot.geometry.notna()]
 center = [batiments.geometry.y.mean(), batiments.geometry.x.mean()]
 m = folium.Map(location=center, zoom_start=15, tiles="CartoDB positron")
 
-# ---- Ajout des infrastructures ----
+# Ajout des infrastructures
 for _, infra in infras_plot.iterrows():
     geom = infra.geometry
     if geom is None:
@@ -195,7 +223,7 @@ for _, infra in infras_plot.iterrows():
             tooltip=f"Infrastructure {infra['infra_id']}<br>Type: {infra['type_batiment']}<br>Phase: {infra['phase']}<br>Jour: {infra['jour_planifie']:.0f}<br>Prise: {infra['prise']}"
         ).add_to(m)
 
-# ---- Ajout des bâtiments ----
+# Ajout des bâtiments
 for _, bat in bat_plot.iterrows():
     geom = bat.geometry
     if geom is None:
@@ -223,7 +251,7 @@ for _, bat in bat_plot.iterrows():
                f"<b>Prise:</b> {bat['prise']}")
     ).add_to(m)
 
-# ---- Légende HTML ----
+# Légende HTML
 legend_html = """
 <div style="position: fixed; bottom: 30px; left: 30px; background-color: white;
             border:2px solid grey; z-index:9999; font-size:14px; padding:10px;">
@@ -235,10 +263,10 @@ legend_html = """
 """
 m.get_root().html.add_child(folium.Element(legend_html))
 
+
 # -----------------------------
 # 9. Export
 # -----------------------------
 m.save("visualisation_folium_avec_types.html")
 print("Carte Folium exportée : visualisation_folium_avec_types.html")
-print(f"\nStatistiques de priorisation:")
-print(reseau.groupby(['type_batiment', 'phase']).size())
+
