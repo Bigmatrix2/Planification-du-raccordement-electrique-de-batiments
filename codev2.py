@@ -220,21 +220,35 @@ class Reseau:
 class Planificateur:
     def __init__(self, reseau: Reseau):
         self.r = reseau
-        self.plan: List[Tuple[int, str, str, int, float, float, float, float, int, List[str]]] = []
+        # etape, id_bat, type, prises, cost_before, time_before, cost_per_prise_before,
+        # time_per_prise_before, cost_after, time_after, cost_per_prise_after, time_per_prise_after,
+        # is_uninhabited, infras
+        self.plan: List[Tuple[int, str, str, int, float, float, float, float, float, float, float, float, int, List[str]]] = []
         self._etape = 0
         self._repare_infras: Set[str] = set()
 
     def run(self):
         # Phase 0 : déjà raccordables (coût+temps == 0)
         phase0 = [b for b in self.r.bats.values() if (b.cost_cur + b.time_cur_h) == 0.0]
-        # On applique AUSSI l'ordre "habité d'abord" dans la phase 0
         phase0_sorted = sorted(phase0, key=lambda x: (x.is_uninhabited, x.cat_priority, -x.prises, x.bat_id))
         for b in phase0_sorted:
+            # AVANT = APRES = 0 dans ce cas
+            cost_before = b.cost_cur
+            time_before = b.time_cur_h
+            cpp_before  = b.cost_per_prise
+            tpp_before  = b.time_per_prise
+
+            cost_after = cost_before
+            time_after = time_before
+            cpp_after  = cpp_before
+            tpp_after  = tpp_before
+
             self._etape += 1
             b.etape = self._etape
             self.plan.append((
                 self._etape, b.bat_id, b.type_batiment, b.prises,
-                b.cost_cur, b.time_cur_h, b.cost_per_prise, b.time_per_prise,
+                cost_before, time_before, cpp_before, tpp_before,
+                cost_after, time_after, cpp_after, tpp_after,
                 b.is_uninhabited, sorted(list(b.infrastructures))
             ))
 
@@ -242,12 +256,18 @@ class Planificateur:
 
         # Boucle principale
         while restants:
-            # Mise à jour dynamique des coûts/temps courants
+            # Mise à jour dynamique (avant choix)
             for bid in restants:
                 self.r.bats[bid].maj(self.r.infras)
 
-            # Choix selon la clé lexicographique complète
+            # Choix selon la clé lexicographique
             choix = min((self.r.bats[bid] for bid in restants), key=lambda b: b.tri_tuple())
+
+            # --- Capture AVANT réparation ---
+            cost_before = choix.cost_cur
+            time_before = choix.time_cur_h
+            cpp_before  = choix.cost_per_prise
+            tpp_before  = choix.time_per_prise
 
             # Réparer toutes ses infrastructures
             for iid in choix.infrastructures:
@@ -255,15 +275,22 @@ class Planificateur:
                     self.r.infras[iid].reparer()
                     self._repare_infras.add(iid)
 
-            # Mise à jour après réparation
+            # Mise à jour après réparation (pour tout le monde)
             for bid in restants:
                 self.r.bats[bid].maj(self.r.infras)
+
+            # --- Capture APRES réparation pour le bâtiment choisi ---
+            cost_after = choix.cost_cur
+            time_after = choix.time_cur_h
+            cpp_after  = choix.cost_per_prise
+            tpp_after  = choix.time_per_prise
 
             self._etape += 1
             choix.etape = self._etape
             self.plan.append((
                 self._etape, choix.bat_id, choix.type_batiment, choix.prises,
-                choix.cost_cur, choix.time_cur_h, choix.cost_per_prise, choix.time_per_prise,
+                cost_before, time_before, cpp_before, tpp_before,
+                cost_after, time_after, cpp_after, tpp_after,
                 choix.is_uninhabited, sorted(list(choix.infrastructures))
             ))
             restants.remove(choix.bat_id)
@@ -273,7 +300,8 @@ class Planificateur:
     def df_plan(self) -> pd.DataFrame:
         return pd.DataFrame(self.plan, columns=[
             "etape","id_batiment","type_batiment","prises",
-            "cost_cur","time_cur_h","cost_per_prise","time_per_prise",
+            "cost_before","time_before","cost_per_prise_before","time_per_prise_before",
+            "cost_after","time_after","cost_per_prise_after","time_per_prise_after",
             "is_uninhabited","infrastructures"
         ])
 
@@ -319,9 +347,10 @@ reseau = Reseau.construire(df)
 planif = Planificateur(reseau).run()
 
 # --- 5) Exports ---
-planif.df_infras().to_excel("priorisation_infra_v2.xlsx", index=False)
-planif.df_batiments().to_excel("priorisation_batiment_v2.xlsx", index=False)
-planif.df_plan().to_excel("plan_raccordement_v2.xlsx", index=False)
-planif.df_plan().to_csv("plan_raccordement_v2.csv", index=False)
+planif.df_infras().to_excel("priorisation_infra_v3.xlsx", index=False)
+planif.df_batiments().to_excel("priorisation_batiment_v3.xlsx", index=False)
+planif.df_plan().to_excel("plan_raccordement_v3.xlsx", index=False)
+planif.df_plan().to_csv("plan_raccordement_v3.csv", index=False)
 
-print("✅ Exports v2 OK.")
+print("✅ Exports v3 OK.")
+
