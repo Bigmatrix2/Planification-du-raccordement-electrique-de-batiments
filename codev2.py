@@ -2,20 +2,40 @@ import pandas as pd
 from dataclasses import dataclass, field
 from typing import Dict, List, Set, Tuple
 
-# Hyperparamètres ajustables
 
-W_CAT   = 1.0
-W_COST  = 0.7
-W_TIME  = 0.3
-W_GAIN  = 0.2
-W_RES   = 0.1
-P_UNINHABITED = 4.0  # score *= (1 + P_UNINHABITED) pour les non habités (donc *5 par défaut)
+# Paramètres du modèle
+
+PARAMS = {
+    # Poids de la métrique bâtiment
+    "W_CAT": 1.0,
+    "W_COST": 0.7,
+    "W_TIME": 0.3,
+    "W_GAIN": 0.2,
+    "W_RES": 0.1,
+    # Pénalité "non habité" (score *= 1+P_UNINHABITED)
+    "P_UNINHABITED": 4.0,  # => x5 par défaut
+    # Normalisation "rolling"
+    "NORM_ROLLING_EVERY": 0,  # 0 = figée, sinon p.ex. 25
+    # Contraintes d'arrêt (None = illimité)
+    "MAX_BUDGET": None,       # en euros
+    "MAX_HOURS": None,        # en heures
+    "NORM_ROLLING_EVERY": 25,
+}
+# Aliases pour lisibilité du reste du code
+W_CAT = PARAMS["W_CAT"]; W_COST = PARAMS["W_COST"]; W_TIME = PARAMS["W_TIME"]
+W_GAIN = PARAMS["W_GAIN"]; W_RES = PARAMS["W_RES"]; P_UNINHABITED = PARAMS["P_UNINHABITED"]
+
 
 CAT_MAP = {"hopital": 0.0, "hôpital": 0.0, "ecole": 0.5, "école": 0.5, "habitation": 1.0}
 
 # Barèmes 
 COST_PER_M = {"aerien": 500.0, "semi-aerien": 750.0, "fourreau": 900.0}
 H_PER_M    = {"aerien": 2.0,   "semi-aerien": 4.0,   "fourreau": 5.0}
+
+# --- Contrôle des types d'infra connus ---
+EXPECTED_INFRA_TYPES = set(k.lower() for k in COST_PER_M.keys())
+# On vérifiera après la fusion que toutes les valeurs appartiennent à ce set
+
 
 # Chargement & fusion
 
@@ -37,11 +57,17 @@ df = df.merge(infra_meta.rename(columns={"id_infra":"infra_id"}), on="infra_id",
 df = df.merge(bats_meta[["id_batiment","type_batiment","nb_maisons","est_habite","taux_occupation"]],
               on="id_batiment", how="left", suffixes=("","_from_bats"))
 
-# nb_maisons: on prend d'abord la valeur provenant de bats_meta si dispo
+# --- Nettoyage/validation clés ---
 if "nb_maisons_from_bats" in df.columns:
     df["nb_maisons"] = df["nb_maisons_from_bats"].fillna(df["nb_maisons"])
     df.drop(columns=["nb_maisons_from_bats"], inplace=True)
+
+# nb_maisons : valeur sûre et entière
+df["nb_maisons"] = df["nb_maisons"].fillna(1)
+if (df["nb_maisons"] < 0).any():
+    raise ValueError("nb_maisons ne doit pas être négatif.")
 df["nb_maisons"] = df["nb_maisons"].astype(int)
+
 # Defaults sur type_batiment & occupation
 df["type_batiment"] = df["type_batiment"].fillna("habitation")
 
@@ -69,6 +95,14 @@ def compute_occ_rate(row):
     return 1.0
 
 df["occ_rate"] = df.apply(compute_occ_rate, axis=1)
+
+# Traçabilité : combien de bâtiments ont une occupation inconnue (=> 1.0 par défaut)
+df["_occ_unknown"] = df["taux_occupation"].isna() & df["est_habite"].isna()
+n_unknown = int(df["_occ_unknown"].sum())
+if n_unknown > 0:
+    print(f"⚠️  {n_unknown} bâtiments sans info d'occupation -> occ_rate=1.0 par défaut.")
+
+
 # Flag pour envoyer les non habités en dernier (1 = non habité, 0 = habité)
 df["is_uninhabited"] = (df["occ_rate"] <= 0.0).astype(int)
 
@@ -92,6 +126,17 @@ def unit_hours(row):
 df["cost_base"]   = df.apply(lambda r: unit_cost(r)  * float(r["longueur"]), axis=1)
 df["time_base_h"] = df.apply(lambda r: unit_hours(r) * float(r["longueur"]), axis=1)
 
+# Vérifier qu'on ne manipule pas des types inconnus (ça éviterait des coûts 0 involontaires)
+unknown_types = (
+    set(df.loc[df["infra_type"].str.strip().str.lower() != "infra_intacte", "type_infra"]
+          .dropna().str.strip().str.lower())
+    - EXPECTED_INFRA_TYPES
+)
+if unknown_types:
+    raise ValueError(
+        f"type_infra inconnus: {sorted(unknown_types)}. "
+        f"Ajoute leurs barèmes dans COST_PER_M et H_PER_M."
+    )
 
 # Modèles orientés objet
 
@@ -241,18 +286,34 @@ class Planificateur:
         self.r = reseau
         self.plan_rows: List[Dict] = []
         self.norm = compute_normalizers(self.r.bats)
+        # Cumuls
+        self.cost_cum = 0.0
+        self.time_cum = 0.0
+        self.prises_cum = 0
+        # Raccourcis contraintes
+        self.max_budget = PARAMS["MAX_BUDGET"]
+        self.max_hours = PARAMS["MAX_HOURS"]
+        self.norm_rolling_every = int(PARAMS["NORM_ROLLING_EVERY"] or 0)
+
+    def _recompute_norm_if_needed(self, step: int):
+        if self.norm_rolling_every > 0 and step > 1 and (step % self.norm_rolling_every == 1):
+            # Recalculer les bornes à partir de l'état courant
+            self.norm = compute_normalizers(self.r.bats)
 
     def run(self):
         restants = set(self.r.bats.keys())
+        step = 0
 
-        # Phase 0: si tu veux explicitement sortir les "déjà raccordables"
-        # tu peux les pousser en tête; ici le score les rendra quasi 0 de toute façon.
         while restants:
-            # maj
+            step += 1
+            # Normalisation "rolling" optionnelle
+            self._recompute_norm_if_needed(step)
+
+            # maj coûts/temps actuels côté bâtiments
             for bid in restants:
                 self.r.bats[bid].maj(self.r.infras)
 
-            # scores
+            # scoring
             scored = []
             for bid in restants:
                 b = self.r.bats[bid]
@@ -261,25 +322,75 @@ class Planificateur:
             scored.sort(key=lambda x: (x[0], x[2].bat_id))
             s, _, choix, parts = scored[0]
 
-            # snapshot "avant"
+            # snapshot "avant" pour ce bâtiment (métriques perçues côté client)
             cost_before = choix.cost_cur
             time_before = choix.time_cur_h
             prises_now  = choix.prises
 
-            # réparer ses infras
+            # L'effort réel de l'étape = somme des coûts/temps des infras effectivement réparées
             repaired = []
+            step_cost = 0.0
+            step_time = 0.0
             for iid in choix.infrastructures:
                 inf = self.r.infras[iid]
                 if inf.cost_cur > 0 or inf.time_cur_h > 0:
                     repaired.append(iid)
-                inf.reparer()
+                    step_cost += inf.cost_cur
+                    step_time += inf.time_cur_h
+
+            # Vérifier contraintes si on applique cette étape
+            next_cost_cum = self.cost_cum + step_cost
+            next_time_cum = self.time_cum + step_time
+            stop_on_budget = (self.max_budget is not None and next_cost_cum > float(self.max_budget))
+            stop_on_hours  = (self.max_hours  is not None and next_time_cum > float(self.max_hours))
+            if stop_on_budget or stop_on_hours:
+                # On n'applique pas l'étape, on s'arrête proprement
+                self.plan_rows.append({
+                    "etape": step,
+                    "id_batiment": None,
+                    "type_batiment": None,
+                    "is_uninhabited": None,
+                    "prises": 0,
+                    "cost_before": 0.0,
+                    "time_before": 0.0,
+                    "cat_score": None,
+                    "score": None,
+                    "score_parts_cpp_n": None,
+                    "score_parts_tpp_n": None,
+                    "score_parts_p_n": None,
+                    "score_parts_c_n": None,
+                    "score_penalty": None,
+                    "infrastructures": [],
+                    "repaired_infras": [],
+                    "step_cost": 0.0,
+                    "step_time": 0.0,
+                    "cost_cum": self.cost_cum,
+                    "time_cum": self.time_cum,
+                    "prises_cum": self.prises_cum,
+                    "note": f"Arrêt sur contrainte : "
+                            f"{'budget' if stop_on_budget else ''}"
+                            f"{' & ' if stop_on_budget and stop_on_hours else ''}"
+                            f"{'heures' if stop_on_hours else ''}",
+                })
+                break
+
+            # Appliquer réparation des infras (zéro résiduel)
+            for iid in repaired:
+                self.r.infras[iid].reparer()
 
             # maj après
             for bid in restants:
                 self.r.bats[bid].maj(self.r.infras)
 
+            # cumuls & métriques marginales
+            self.cost_cum = next_cost_cum
+            self.time_cum = next_time_cum
+            self.prises_cum += prises_now
+            euro_per_prise = (step_cost / prises_now) if prises_now > 0 else None
+            h_per_prise = (step_time / prises_now) if prises_now > 0 else None
+
             self.plan_rows.append({
-                "etape": len(self.plan_rows) + 1,
+                "etape": step,
                 "id_batiment": choix.bat_id,
                 "type_batiment": choix.type_batiment,
                 "is_uninhabited": choix.is_uninhabited,
@@ -295,9 +406,18 @@ class Planificateur:
                 "score_penalty": parts["penalty"],
                 "infrastructures": sorted(list(choix.infrastructures)),
                 "repaired_infras": repaired,
+                "step_cost": step_cost,
+                "step_time": step_time,
+                "euro_per_prise_marginal": euro_per_prise,
+                "h_per_prise_marginal": h_per_prise,
+                "cost_cum": self.cost_cum,
+                "time_cum": self.time_cum,
+                "prises_cum": self.prises_cum,
+                "note": None,
             })
 
             restants.remove(choix.bat_id)
+
         return self
 
     def df_plan(self) -> pd.DataFrame:
@@ -349,4 +469,18 @@ df_bats.to_excel("priorisation_batiment.xlsx", index=False)
 df_plan.to_excel("plan_raccordement.xlsx", index=False)
 df_plan.to_csv("plan_raccordement.csv", index=False)
 
-print("✅ Exports : OK")
+# Exports additionnels utiles pour la soutenance
+cols_curve = ["etape", "step_cost", "step_time", "euro_per_prise_marginal",
+              "h_per_prise_marginal", "cost_cum", "time_cum", "prises_cum", "note"]
+(df_plan[cols_curve]
+ .to_csv("plan_cumul_marginal.csv", index=False))
+
+# Top infras réellement réparées (fréquence)
+from collections import Counter
+rep_counts = Counter(i for row in df_plan["repaired_infras"] for i in (row or []))
+df_rep = pd.DataFrame(
+    [{"infra_id": k, "repaired_times": v} for k, v in rep_counts.items()]
+).sort_values("repaired_times", ascending=False)
+df_rep.to_csv("infras_reparees_top.csv", index=False)
+
+print("✅ Exports : OK (dont courbes cumulatives et top infras réparées)")
