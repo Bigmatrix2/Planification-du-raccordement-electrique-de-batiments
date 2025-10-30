@@ -484,23 +484,3 @@ df_rep = pd.DataFrame(
 df_rep.to_csv("infras_reparees_top.csv", index=False)
 
 print("✅ Exports : OK (dont courbes cumulatives et top infras réparées)")
-
-import folium
-from shapely.geometry import Point, LineString, MultiLineString, MultiPoint
-import pandas as pd
-
-# -----------------------------
-# Couleurs par score infra/bâtiment
-# -----------------------------
-def infra_color(infra_score, is_intact):
-    if is_intact:
-        return "#4daf4a"  # intacte
-    # gradient rouge-orange selon score
-    max_score = df_infra["score_infra"].max() if not df_infra.empty else 1
-    norm = min(1.0, infra_score/max_score)
-    r = int(179 + (255-179)*norm)  # 179 -> 255
-    g = int(0 + (140-0)*(1-norm))  # 0 -> 140
-    return f"#{r:02x}{g:02x}00"
-
-def bat_color(is_uninhabited):
-    return "#cccccc" if is_uninhabited else "#0000ff"
