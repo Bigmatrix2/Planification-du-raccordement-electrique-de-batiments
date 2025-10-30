@@ -44,10 +44,23 @@ class Batiment:
     cost_cur: float = 0.0
     time_cur_h: float = 0.0
     cat_score: float = 0.0  # 0 hôpital, 0.5 école, 1 habitation
+    # --- NOUVEAU : pour pénaliser les "longues" infras dans le scoring
+    max_infra_time_h: float = 0.0
+    sum_infra_time_h: float = 0.0
 
     def maj(self, infras: Dict[str, Infrastructure]):
-        self.cost_cur   = sum(infras[i].cost_cur   for i in self.infrastructures)
-        self.time_cur_h = sum(infras[i].time_cur_h for i in self.infrastructures)
+        self.cost_cur   = 0.0
+        self.time_cur_h = 0.0
+        tmax = 0.0
+        tsum = 0.0
+        for i in self.infrastructures:
+            inf = infras[i]
+            self.cost_cur   += inf.cost_cur
+            self.time_cur_h += inf.time_cur_h
+            tmax = max(tmax, inf.time_cur_h)
+            tsum += inf.time_cur_h
+        self.max_infra_time_h = tmax
+        self.sum_infra_time_h = tsum
 
     @property
     def prises(self) -> int:

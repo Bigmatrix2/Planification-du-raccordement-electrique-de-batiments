@@ -14,6 +14,15 @@ PARAMS = {
     # Contraintes d'arrêt (None = illimité)
     "MAX_BUDGET": None,       # en euros
     "MAX_HOURS": None,        # en heures
+    # --- Main d'oeuvre & cadence ---
+    "WORKER_COST_EUR_PER_H": 37.5,  # 300€/8h
+    "WORKERS_PER_INFRA_MAX": 4,
+    "HOPITAL_MAX_WALL_HOURS": 16.0,  # 20h avec 20% de marge => 16h
+    # Poids du temps mur (wall-clock) par prise
+    "W_WALL": 0.25,      # ajuste entre 0.15 et 0.40 selon ta sensibilité
+    # Utiliser le coût économique (matériaux + main-d'œuvre) dans le coût/prise
+    "INCLUDE_LABOUR_IN_COST": True,
+
 }
 
 # Catégories de bâtiment

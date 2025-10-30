@@ -11,7 +11,8 @@ def parse_bool_like(x):
 
 def warn_unknown_occupation(df):
     df["_occ_unknown"] = df["taux_occupation"].isna() & df["est_habite"].isna()
-    n_unknown = int(df["_occ_unknown"].sum())
-    if n_unknown > 0:
-        print(f"⚠️  {n_unknown} bâtiments sans info d'occupation -> occ_rate=1.0 par défaut.")
+    n_rows = int(df["_occ_unknown"].sum())
+    n_bats = int(df.loc[df["_occ_unknown"], "id_batiment"].nunique()) if "id_batiment" in df.columns else n_rows
+    print(f"⚠️  {n_bats} bâtiments (sur {n_rows} lignes) sans info d'occupation -> occ_rate=1.0 par défaut.")
     df.drop(columns=["_occ_unknown"], errors="ignore", inplace=True)
+

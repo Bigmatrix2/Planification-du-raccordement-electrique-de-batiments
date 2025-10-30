@@ -60,4 +60,42 @@ def export_all(df_plan: pd.DataFrame, df_bats: pd.DataFrame, df_infra: pd.DataFr
     ).sort_values("repaired_times", ascending=False)
     df_rep.to_csv("infras_reparees_top.csv", index=False, encoding="utf-8")
 
+    # Agrégats par phase
+    if "phase" in df_plan.columns:
+        # Totaux par phase
+        agg = (df_plan
+               .dropna(subset=["phase"])
+               .groupby("phase")
+               .agg(
+                   step_cost=("step_cost","sum"),
+                   step_time_h=("step_time","sum"),
+                   labour_cost=("labour_cost","sum")
+               )
+               .reset_index())
+
+        # Temps mur minimal par phase = max(time_i/4) sur l'ensemble des infras de la phase
+        # On reconstruit la liste des infras et de leurs temps par étape
+        rows_wc = []
+        for phase, sub in df_plan.dropna(subset=["phase"]).groupby("phase"):
+            # on déroule toutes les infras réparées dans cette phase avec leur temps
+            times = []
+            for _, row in sub.iterrows():
+                # NB: on ne stocke pas les temps par infra individuellement dans df_plan,
+                # donc on approxime en supposant que le "wall_clock_step_h" découle bien de la liste interne.
+                # Pour être exact, il faudrait pousser les temps infra par infra dans df_plan.
+                # Ici on prend le max des wall_clock_step_h des étapes de la phase (borne supérieure plausible).
+                times.append(row.get("wall_clock_step_h", 0.0))
+            wall_clock_phase = max(times) if times else 0.0
+            rows_wc.append({"phase": phase, "wall_clock_phase_h": wall_clock_phase})
+        df_wc = pd.DataFrame(rows_wc)
+
+        df_phase = agg.merge(df_wc, on="phase", how="left").sort_values("phase")
+        df_phase.to_csv("phases_aggregats.csv", index=False, encoding="utf-8")
+
+        # Audit hôpital
+        hop = df_plan[df_plan["phase"] == "0(hôpital)"]
+        if not hop.empty:
+            hop[["etape","id_batiment","step_cost","step_time","labour_cost","wall_clock_step_h","note"]] \
+                .to_csv("phase0_hopital.csv", index=False, encoding="utf-8")
+
     print("✅ Exports : OK (dont courbes cumulatives et top infras réparées)")
