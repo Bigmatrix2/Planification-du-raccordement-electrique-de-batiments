@@ -250,6 +250,6 @@ m.get_root().html.add_child(folium.Element(legend_infra_html))
 # 7. Export et stats
 # -------------------------------------------------
 m.save("visualisation_folium_types_infra.html")
-print("Carte Folium exportée : visualisation_folium_types_.html")
+print("Carte Folium exportée : visualisation_folium_types_infra.html")
 print("\nStatistiques de priorisation (batiments / phase):")
 print(reseau.groupby(['type_batiment', 'phase']).size())
