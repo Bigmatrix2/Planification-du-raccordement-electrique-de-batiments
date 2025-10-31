@@ -115,8 +115,11 @@ Les cartes sont générées à partir des shapefiles (réseau et bâtiments) dan
 - Bâtiments : phase 0 (hopital) en rouge 
 
 ###  Carte 2 — Zone hospitalière
+
+<img width="741" height="632" alt="image" src="https://github.com/user-attachments/assets/5de3c078-f259-41a8-93a6-c720f6e9b966" />
+
 - Hôpital → **rouge**
-- Infrastructures associées → couleurs selon temps mur
+- Infrastructures associées à réparer 
 
 ###  Carte 3 — Progression par phase
 - Dégradé : **jaune (Phase 1)** → **violet (Phase 4)**  
