@@ -105,8 +105,14 @@ L’ordre complet est disponible dans le fichier `plan_raccordement.csv`.
 Les cartes sont générées à partir des shapefiles (réseau et bâtiments) dans QGIS.
 
 ###  Carte 1 — Réseau global
-- Infrastructures réparées → **bleu clair**
-- Bâtiments raccordés → **vert**, selon la phase
+<img width="990" height="726" alt="image" src="https://github.com/user-attachments/assets/1ea80150-613b-461e-85ef-cdbfbabaca8f" />
+
+- Infrastructures : intacte en gris et à replacer en rouge.
+
+  <img width="958" height="669" alt="image" src="https://github.com/user-attachments/assets/7475aff7-36d8-4366-9c69-33a70db5f827" />
+  <img width="334" height="162" alt="image" src="https://github.com/user-attachments/assets/c75c9fcb-0e35-47a9-a76c-51e2a62aa0fd" />
+
+- Bâtiments : phase 0 (hopital) en rouge 
 
 ###  Carte 2 — Zone hospitalière
 - Hôpital → **rouge**
