@@ -30,9 +30,8 @@ Chaque bâtiment reçoit un **score de priorité** basé sur plusieurs critères
 Les critères sont **normalisés** (entre 0 et 1) puis combinés dans une formule de score inversée  
 (plus petit score = plus prioritaire) :
 
-\[
-\text{Score}(b) = \alpha \cdot \text{cost}_n + \beta \cdot \text{time}_n + \gamma \cdot (1 - \text{prises}_n) + \delta \cdot (1 - \text{occ\_rate}_n) + \text{penalty}
-\]
+<img width="1242" height="80" alt="image" src="https://github.com/user-attachments/assets/ed0322ae-5dce-43e6-8340-7f47dedfa7ff" />
+
 
 où :
 - `penalty` = pénalités (ex : bâtiments inactifs, isolés, ou peu rentables)
