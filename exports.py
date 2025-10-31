@@ -5,6 +5,7 @@ import pandas as pd
 from collections import Counter
 from models import Reseau
 from scoring import score_infra
+import os
 
 def build_bats_df(reseau: Reseau) -> pd.DataFrame:
     rows_b = []
@@ -43,22 +44,25 @@ def build_infras_df(reseau: Reseau) -> pd.DataFrame:
 
 def export_all(df_plan: pd.DataFrame, df_bats: pd.DataFrame, df_infra: pd.DataFrame):
     # Excel/CSV principaux
-    df_infra.to_excel("priorisation_infra.xlsx", index=False)
-    df_bats.to_excel("priorisation_batiment.xlsx", index=False)
-    df_plan.to_excel("plan_raccordement.xlsx", index=False)
-    df_plan.to_csv("plan_raccordement.csv", index=False, encoding="utf-8")
+    if not os.path.exists('static'):
+        os.mkdir('static')
+
+    df_infra.to_excel("static/priorisation_infra.xlsx", index=False)
+    df_bats.to_excel("static/priorisation_batiment.xlsx", index=False)
+    df_plan.to_excel("static/plan_raccordement.xlsx", index=False)
+    df_plan.to_csv("static/plan_raccordement.csv", index=False, encoding="utf-8")
 
     # Exports courbes cumulatives et marginals
     cols_curve = ["etape", "step_cost", "step_time", "euro_per_prise_marginal",
                   "h_per_prise_marginal", "cost_cum", "time_cum", "prises_cum", "note"]
-    df_plan[cols_curve].to_csv("plan_cumul_marginal.csv", index=False, encoding="utf-8")
+    df_plan[cols_curve].to_csv("static/plan_cumul_marginal.csv", index=False, encoding="utf-8")
 
     # Top infras réellement réparées
     rep_counts = Counter(i for row in df_plan["repaired_infras"] for i in (row or []))
     df_rep = pd.DataFrame(
         [{"infra_id": k, "repaired_times": v} for k, v in rep_counts.items()]
     ).sort_values("repaired_times", ascending=False)
-    df_rep.to_csv("infras_reparees_top.csv", index=False, encoding="utf-8")
+    df_rep.to_csv("static/infras_reparees_top.csv", index=False, encoding="utf-8")
 
     # Agrégats par phase
     if "phase" in df_plan.columns:
@@ -90,12 +94,12 @@ def export_all(df_plan: pd.DataFrame, df_bats: pd.DataFrame, df_infra: pd.DataFr
         df_wc = pd.DataFrame(rows_wc)
 
         df_phase = agg.merge(df_wc, on="phase", how="left").sort_values("phase")
-        df_phase.to_csv("phases_aggregats.csv", index=False, encoding="utf-8")
+        df_phase.to_csv("static/phases_aggregats.csv", index=False, encoding="utf-8")
 
         # Audit hôpital
         hop = df_plan[df_plan["phase"] == "0(hôpital)"]
         if not hop.empty:
             hop[["etape","id_batiment","step_cost","step_time","labour_cost","wall_clock_step_h","note"]] \
-                .to_csv("phase0_hopital.csv", index=False, encoding="utf-8")
+                .to_csv("static/phase0_hopital.csv", index=False, encoding="utf-8")
 
-    print("✅ Exports : OK (dont courbes cumulatives et top infras réparées)")
+    print("Exports : OK (dont courbes cumulatives et top infras réparées)")
