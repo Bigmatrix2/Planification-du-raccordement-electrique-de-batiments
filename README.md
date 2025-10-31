@@ -121,9 +121,6 @@ Les cartes sont générées à partir des shapefiles (réseau et bâtiments) dan
 - Hôpital → **rouge**
 - Infrastructures associées à réparer 
 
-###  Carte 3 — Progression par phase
-- Dégradé : **jaune (Phase 1)** → **violet (Phase 4)**  
-- Visualise la propagation spatiale du chantier dans la zone d’étude
 
 *(Les shapefiles proviennent des exports `infras_reparees_top.csv` et `plan_raccordement.csv`.)*
 
