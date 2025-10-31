@@ -1,6 +1,4 @@
 # dataframes finaux & fichiers
-
-
 import pandas as pd
 from collections import Counter
 from models import Reseau
